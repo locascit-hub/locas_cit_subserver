@@ -18,7 +18,7 @@ const port = process.env.PORT || 3000;
 let timer=null;
 let url=process.env.URL||"";
 let counter=0; //2hrs in 13 minutes frequency
-let stopcount=1;
+let stopcount=0;
 
 
 // VAPID keys
@@ -143,7 +143,7 @@ async function sendPush(students, payload,byFunc,bNo) {
   );
 
   console.log(
-    `✅ Push finished for "${byFunc}-${bNo}" → 👍 ${successCount}, ❌ ${failCount}`
+    `✅ Push finished for "${byFunc}-${bNo}" → ${successCount},${failCount}`
   );
 
   return { successCount, failCount };
