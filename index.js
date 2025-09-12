@@ -214,8 +214,14 @@ app.get("/hey",(req, res) => {
 });
 
 app.get("/getready",(req, res) => {
-  stopcount=11;
-  res.send("Timer set to 11" );
+  const {sc}=req.query;
+  if(!sc){
+  stopcount=9;
+  }
+  else{
+    stopcount=parseInt(sc);
+  }
+  res.send(`Timer set to ${stopcount}`);
 });
 
 
@@ -248,4 +254,4 @@ timer = setInterval(() => {
 
     console.log("now-count", counter++);
 
-  }, 3000); // 13 minutes
+  }, 780000); // 13 minutes interval (780000 ms)
