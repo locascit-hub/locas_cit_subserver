@@ -37,10 +37,13 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
-
+// // Initialize single SQLite DB
+const db = new Database("students.db");
 //-----------------------////--------------------
 //Create necessary folders
-if (fs.existsSync("buses")){
+
+function recreateLogsFolder(){
+  if (fs.existsSync("buses")){
   fs.rmSync("buses", { recursive: true, force: true });
 console.log("Folder deleted!");
   fs.mkdirSync("buses");
@@ -50,10 +53,10 @@ else{
   fs.mkdirSync("buses");
   console.log("Folder created!");
 }
-// // Initialize single SQLite DB
-const db = new Database("students.db");
+}
 
-// Create Students table if not exists
+function wipeOutAndCreateDB(){
+  // Create Students table if not exists
 db.exec(`
 CREATE TABLE IF NOT EXISTS Students (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,6 +71,8 @@ CREATE INDEX IF NOT EXISTS idx_clg_sent ON Students(clgNo, sent);
 
 //truncate all rows and reset id counter
 db.exec("DELETE FROM Students; DELETE FROM sqlite_sequence WHERE name='Students';");
+console.log("Database wiped out and ready!");
+}
 
 //-----------------------////--------------------
 
@@ -101,6 +106,8 @@ async function populateStudents() {
   console.log(`Inserted ${data.length} students into single SQLite DB`);
 }
 
+recreateLogsFolder();
+wipeOutAndCreateDB();
 // Run once
 populateStudents();
 
@@ -142,6 +149,21 @@ async function sendPush(students, payload,byFunc,bNo) {
   return { successCount, failCount };
 }
 
+app.get("/actions", (req, res) => {
+  const {task}=req.query;
+  if(task ==="resetdb"){
+    wipeOutAndCreateDB();
+    populateStudents();
+    res.send("Database reset and populated");
+  }
+  else if(task==="resetlogs"){
+    recreateLogsFolder();
+    res.send("Logs folder recreated");
+  }
+  else{
+    res.send("No valid action specified");
+  }
+});
 
 // Nearby students
 app.post("/nearbyfeature", async (req, res) => {
