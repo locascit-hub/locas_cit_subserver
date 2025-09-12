@@ -18,6 +18,7 @@ const port = process.env.PORT || 3000;
 let timer=null;
 let url=process.env.URL||"";
 let counter=0; //2hrs in 13 minutes frequency
+let stopcount=1;
 
 
 // VAPID keys
@@ -208,25 +209,13 @@ app.get("/busstarted", async (req, res) => {
 });
 
 
+app.get("/hey",(req, res) => {
+  res.send("hey");
+});
+
 app.get("/getready",(req, res) => {
-
-  if(counter>11){
-    clearInterval(timer);
-    timer=null;
-    counter=0;
-    console.log("Timer stopped after 2 hours");
-    res.send("");
-    return;
-  }
-
-  if(timer){
-    counter++;
-    console.log("now-count", counter);
-    res.send("");
-    return;
-  }
-
-  res.send("Timer started");
+  stopcount=11;
+  res.send("Timer set to 11" );
 });
 
 
@@ -235,6 +224,7 @@ app.get("/stopcount",(req, res) => {
     clearInterval(timer);
     timer=null;
     counter=0;
+    stopcount=1;
     console.log("Timer stopped manually");
   }
   res.send("Timer stopped");
@@ -245,8 +235,17 @@ app.get("/stopcount",(req, res) => {
 app.listen(port, () => console.log(`Server running on port ${port}`));
 
 timer = setInterval(() => {
-    fetch(`${url}/getready`)
+    fetch(`${url}/hey`)
     .catch(err => console.error("Error in counter:", err));
-  }, 780000); // 13 minutes
-counter++;
-console.log("now-count", counter);
+
+    if(counter>stopcount){
+    clearInterval(timer);
+    timer=null;
+    counter=0;
+    console.log(`Timer stopped after ${stopcount+1}`);
+    return;
+     }
+
+    console.log("now-count", counter++);
+
+  }, 3000); // 13 minutes
