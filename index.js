@@ -183,7 +183,7 @@ app.post("/nearbyfeature", async (req, res) => {
 
   const updateSent = db.prepare("UPDATE Students SET sent = 1 WHERE id = ?");
 
-  const pushData = { title: `Bus ${bNo} is nearby !!`, body: "", data: {} };
+  const pushData = { title: `Bus ${bNo} is nearby !!`, data: {bNo:bNo,ts: Date.now()} };
 
   // Fire and forget (don't block API response)
   if(candidates.length>0){
