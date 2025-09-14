@@ -216,6 +216,8 @@ app.get("/busstarted", async (req, res) => {
 
   const pushData = { title: `Bus ${bNo} has started !!`, data: {bNo:bNo,ts: Date.now()} };
 
+  console.log(pushData);
+
   // Fire and forget
   if(students.length>0){
   (async () => {
