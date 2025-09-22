@@ -5,8 +5,17 @@ import cors from "cors";
 import Database from "better-sqlite3";
 import webpush from "web-push";
 import fs from "fs";
+import {EventSource} from "eventsource";
+import path from "path";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
 
 dotenv.config();
+
+
+// Recreate __dirname in ES module scope
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Express setup
 const app = express();
@@ -14,6 +23,11 @@ app.use(cors());
 app.use(express.json());
 const port = process.env.PORT || 3000;
 
+app.use(express.static(path.join(__dirname, "buses")));
+
+app.get("/get_students_db", (req, res) => {
+  res.sendFile(path.join(__dirname, "students.db"));
+});
 
 let timer=null;
 let url=process.env.URL||"";
@@ -216,7 +230,7 @@ app.get("/busstarted", async (req, res) => {
 
   const pushData = { title: `Bus ${bNo} has started !!`, data: {bNo:bNo,ts: Date.now()} };
 
-  console.log(pushData);
+  console.log(pushData,students.length);
 
   // Fire and forget
   if(students.length>0){
@@ -249,6 +263,115 @@ app.get("/getready",(req, res) => {
 });
 
 
+async function bus_started(bNo,res) {
+  console.log("Bus started request for bus no:", bNo);
+  if (!bNo) return "Missing bus number";
+
+  const students = db.prepare(
+    "SELECT * FROM Students where clgNo = ?"
+  ).all(`${bNo}.0`);
+
+  // console.log(`Bus ${bNo} started with ${students.length} students`);
+
+  const pushData = { title: `Bus ${bNo} has started !!`, data: {bNo:bNo,ts: Date.now()} };
+
+  console.log(pushData,students.length);
+
+  // Fire and forget
+  if(students.length>0){
+  (async () => {
+    try {
+      await sendPush(students, pushData,"busstarted",bNo);
+    } catch (err) {
+      console.error("Push loop error:", err);
+    }
+  })();
+}
+
+}
+
+
+async function bus_stopped(bNo) {
+  console.log("stopped")
+}
+
+
+async function bus_nearby(bNo,lat,lon) {
+  console.log("Bus nearby request for bus no:", bNo,lat,lon);
+  if (!bNo || lat == null || lon == null)
+    return "Missing bus number or coordinates";
+
+  const box = getBoundingBox(lat, lon, 1); // 1 km radius
+
+  const candidates = db.prepare(
+    `SELECT id, subscription 
+     FROM Students
+     WHERE clgNo = ? AND sent = 0
+       AND lat BETWEEN ? AND ?
+       AND lon BETWEEN ? AND ?`
+  ).all( `${bNo}.0`, box.minLat, box.maxLat, box.minLon, box.maxLon);
+
+  const updateSent = db.prepare("UPDATE Students SET sent = 1 WHERE id = ?");
+
+  const pushData = { title: `Bus ${bNo} is nearby !!`, data: {bNo:bNo,ts: Date.now()} };
+
+  // Fire and forget (don't block API response)
+  console.log("Nearby candidates:",candidates.length);
+  if(candidates.length>0){
+  (async () => {
+    try {
+      await sendPush(candidates, pushData,"nearby",bNo);
+      for (const student of candidates) updateSent.run(student.id);
+    } catch (err) {
+      console.error("Push loop error:", err);
+    }
+  })();
+}
+
+  fs.appendFileSync(`buses/logs_${bNo}.txt`, `${lat},${lon}\n`);
+
+}
+
+
+app.get("/starttolisten",(req, res) => {
+
+   const { busNo } = req.query; 
+  console.log("Starting to listen to buses",busNo);
+
+  const url = `${process.env.WORKERDOMAIN}/substream?busNo=${busNo}&auth=iamrender`;
+  const es = new EventSource(url);
+
+  es.onopen = () => console.log(`Connected to bus ${busNo} SSE`);
+  es.onerror = (err) => console.error(`Error on bus ${busNo}:`, err);
+
+  es.onmessage = (event) => {
+    try {
+    if(event.data!=="connected"){
+    const data = JSON.parse(event.data);
+    console.log(data.event,data);
+
+    if(data.event==="bus_started"){
+      bus_started(data.busNo);
+    }
+    else if(data.event==="bus_stopped"){
+      bus_stopped(data.busNo);
+    }
+    else if(data.event==="new_loc"){
+      bus_nearby(data.busNo,data.lat,data.long);
+    }
+  }
+    console.log(`Bus ${busNo} update:`, event.data,Date.now());
+    }
+    catch(err){
+      console.error("Failed to parse SSE data",busNo);
+    }
+  };
+
+  res.send("Started listening to buses");
+
+});
+
+
 app.get("/stopcount",(req, res) => {
   if(timer){
     clearInterval(timer);
@@ -259,6 +382,8 @@ app.get("/stopcount",(req, res) => {
   }
   res.send("Timer stopped");
 });
+
+
 
 
 
