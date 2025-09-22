@@ -186,7 +186,7 @@ app.post("/nearbyfeature", async (req, res) => {
     return res.status(400).send("Missing bus number or coordinates");
 
   const box = getBoundingBox(lat, lon, 1); // 1 km radius
-
+  console.log(lat,",",lon);
   const candidates = db.prepare(
     `SELECT id, subscription 
      FROM Students
