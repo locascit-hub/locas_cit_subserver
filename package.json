@@ -10,13 +10,17 @@
   "description": "",
   "type": "module",
   "dependencies": {
-    "@supabase/supabase-js": "^2.57.4",
+    "@supabase/supabase-js": "^2.75.0",
+    "archiver": "^7.0.1",
     "better-sqlite3": "^12.2.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",
     "eventsource": "^4.0.0",
     "express": "^5.1.0",
     "fs": "^0.0.1-security",
+    "googleapis": "^162.0.0",
+    "open": "^10.2.0",
+    "path": "^0.12.7",
     "web-push": "^3.6.7"
   }
 }

@@ -9,6 +9,7 @@ import {EventSource} from "eventsource";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
+import zip from "express-zip";
 
 dotenv.config();
 
@@ -187,7 +188,6 @@ app.post("/nearbyfeature", async (req, res) => {
     return res.status(400).send("Missing bus number or coordinates");
 
   const box = getBoundingBox(lat, lon, 1); // 1 km radius
-  console.log(lat,",",lon);
   const candidates = db.prepare(
     `SELECT id, subscription 
      FROM Students
@@ -231,8 +231,6 @@ app.get("/busstarted", async (req, res) => {
 
   const pushData = { title: `Bus ${bNo} has started !!`, data: {bNo:bNo,ts: Date.now()} };
 
-  console.log(pushData,students.length);
-
   // Fire and forget
   if(students.length>0){
   (async () => {
@@ -265,7 +263,6 @@ app.get("/getready",(req, res) => {
 
 
 async function bus_started(bNo,res) {
-  console.log("Bus started request for bus no:", bNo);
   if (!bNo) return "Missing bus number";
   const students = db.prepare(
     "SELECT * FROM Students where clgNo = ?"
@@ -275,7 +272,7 @@ async function bus_started(bNo,res) {
 
   const pushData = { title: `Bus ${bNo} has started !!`, data: {bNo:bNo,ts: Date.now()} };
 
-  console.log(pushData,students.length);
+    console.log("Bus started request for bus no:", bNo,"with",students.length,"students");
 
   // Fire and forget
   if(students.length>0){
@@ -298,7 +295,6 @@ async function bus_stopped(bNo) {
 
 
 async function bus_nearby(bNo,lat,lon) {
-  console.log("Bus nearby request for bus no:", bNo,lat,lon);
   if (!bNo || lat == null || lon == null)
     return "Missing bus number or coordinates";
 
@@ -316,8 +312,6 @@ async function bus_nearby(bNo,lat,lon) {
 
   const pushData = { title: `Bus ${bNo} is nearby !!`, data: {bNo:bNo,ts: Date.now()} };
 
-  // Fire and forget (don't block API response)
-  console.log("Nearby candidates:",candidates.length);
   if(candidates.length>0){
   (async () => {
     try {
@@ -328,9 +322,6 @@ async function bus_nearby(bNo,lat,lon) {
     }
   })();
 }
-
-  fs.appendFileSync(`buses/logs_${bNo}.txt`, `${lat},${lon}\n`);
-
 }
 
 
@@ -351,7 +342,6 @@ app.get("/starttolisten",(req, res) => {
     try {
     if(event.data!=="connected"){
     const data = JSON.parse(event.data);
-    console.log(data.event,data);
 
     if(data.event==="bus_started"){
       bus_started(data.busNo);
@@ -362,8 +352,10 @@ app.get("/starttolisten",(req, res) => {
     else if(data.event==="new_loc"){
       bus_nearby(data.busNo,data.lat,data.long);
     }
+    if(data.lat && data.long){
+      fs.appendFile(`buses/logs_${data.busNo}.txt`, `${data.lat},${data.long}\n`);
+    }
   }
-    console.log(`Bus ${busNo} update:`, event.data,Date.now());
     }
     catch(err){
       console.error("Failed to parse SSE data",busNo);
@@ -386,6 +378,19 @@ app.get("/stopcount",(req, res) => {
   res.send("Timer stopped");
 });
 
+app.get("/exportbuses", (req, res) => {
+  const files = fs.readdirSync("buses"); // array of filenames
+
+  const zipFiles = files.map(file => ({
+    path: `buses/${file}`, // file path on disk
+    name: file            // filename in zip
+  }));
+
+  // correct: res.zip(array_of_files, zip_filename)
+  res.zip(zipFiles, `buses_logs_${process.env.SUBSERVER_NO || "unknown"}.zip`);
+});
+
+
 
 
 
@@ -407,3 +412,85 @@ timer = setInterval(() => {
     console.log("now-count", counter++, buses);
 
   }, 780000); // 13 minutes interval (780000 ms)
+
+
+import archiver from "archiver";
+
+const SERVER_NO = process.env.SUBSERVER_NO || "unknown";
+const LOCAL_FOLDER = "buses";
+const TMP_FOLDER = "tmp";
+
+// Initialize Supabase client
+const supabaseStorage = createClient(
+  process.env.SUPABASE_URL_STORAGE,
+  process.env.SUPABASE_SERVICE_ROLE_KEY_STORAGE
+);
+
+const BUCKET_NAME = "Buses"; // name of your Supabase bucket
+
+// Helper: create zip from local folder
+async function createZip(zipPath) {
+  const files = fs.readdirSync(LOCAL_FOLDER);
+  if (!files.length) throw new Error("No files to zip");
+
+  await new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver("zip", { zlib: { level: 9 } });
+
+    output.on("close", resolve);
+    archive.on("error", reject);
+
+    archive.pipe(output);
+    files.forEach(f => archive.file(path.join(LOCAL_FOLDER, f), { name: f }));
+    archive.finalize();
+  });
+}
+
+// Helper: delete file if exists in Supabase Storage
+async function deleteIfExists(fileName) {
+  const { data, error } = await supabaseStorage.storage
+    .from(BUCKET_NAME)
+    .list("", { search: fileName });
+
+  if (error) throw error;
+
+  const existing = data.find(f => f.name === fileName);
+  if (existing) {
+    await supabaseStorage.storage.from(BUCKET_NAME).remove([fileName]);
+  }
+}
+
+// Route: zip & upload
+app.get("/exportbuses", async (req, res) => {
+  try {
+    const dayStr = String(new Date().getDate()).padStart(2, "0");
+    const zipFilename = `buses_logs_${SERVER_NO}_${dayStr}.zip`;
+
+    fs.mkdirSync(TMP_FOLDER, { recursive: true });
+    const zipPath = path.join(TMP_FOLDER, zipFilename);
+
+    // 1️⃣ Create zip
+    await createZip(zipPath);
+
+    // 2️⃣ Delete old file if exists
+    await deleteIfExists(zipFilename);
+
+    // 3️⃣ Upload new zip
+    const fileStream = fs.createReadStream(zipPath);
+    const { error: uploadError } = await supabaseStorage.storage
+  .from(BUCKET_NAME)
+  .upload(zipFilename, fs.createReadStream(zipPath), {
+    upsert: true,
+    duplex: "half"
+  });
+
+    if (uploadError) throw uploadError;
+
+    fs.unlinkSync(zipPath);
+
+    res.send(`✅ Uploaded ${zipFilename} to Supabase Storage`);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error uploading buses");
+  }
+});
