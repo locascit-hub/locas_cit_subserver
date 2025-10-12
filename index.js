@@ -357,7 +357,7 @@ app.get("/starttolisten",(req, res) => {
   }
     }
     catch(err){
-      console.error("Failed to parse SSE data",busNo);
+      console.error("Failed to parse SSE data",busNo,err);
     }
   };
 
@@ -376,22 +376,6 @@ app.get("/stopcount",(req, res) => {
   }
   res.send("Timer stopped");
 });
-
-app.get("/exportbuses", (req, res) => {
-  const files = fs.readdirSync("buses"); // array of filenames
-
-  const zipFiles = files.map(file => ({
-    path: `buses/${file}`, // file path on disk
-    name: file            // filename in zip
-  }));
-
-  // correct: res.zip(array_of_files, zip_filename)
-  res.zip(zipFiles, `buses_logs_${process.env.SUBSERVER_NO || "unknown"}.zip`);
-});
-
-
-
-
 
 
 app.listen(port, () => console.log(`Server running on port ${port}`));
