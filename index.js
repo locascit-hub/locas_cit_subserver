@@ -352,7 +352,7 @@ app.get("/starttolisten",(req, res) => {
       bus_nearby(data.busNo,data.lat,data.long);
     }
     if(data.lat && data.long){
-      fs.appendFile(`buses/logs_${data.busNo}.txt`, `${data.lat},${data.long}\n`);
+      fs.appendFileSync(`buses/logs_${data.busNo}.txt`, `${data.lat},${data.long}\n`);
     }
   }
     }
