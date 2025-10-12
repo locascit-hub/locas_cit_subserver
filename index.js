@@ -10,7 +10,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import zip from "express-zip";
-
 dotenv.config();
 
 
@@ -253,7 +252,7 @@ app.get("/hey",(req, res) => {
 app.get("/getready",(req, res) => {
   const {sc}=req.query;
   if(!sc){
-  stopcount=9;
+  stopcount=12;
   }
   else{
     stopcount=parseInt(sc);
@@ -493,4 +492,16 @@ app.get("/exportbuses", async (req, res) => {
     console.error(err);
     res.status(500).send("Error uploading buses");
   }
+});
+
+app.get("/exportbuseszip", (req, res) => {
+  const files = fs.readdirSync("buses"); // array of filenames
+
+  const zipFiles = files.map(file => ({
+    path: `buses/${file}`, // file path on disk
+    name: file            // filename in zip
+  }));
+
+  // correct: res.zip(array_of_files, zip_filename)
+  res.zip(zipFiles, `buses_logs_${process.env.SUBSERVER_NO || "unknown"}.zip`);
 });

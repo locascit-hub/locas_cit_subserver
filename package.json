@@ -17,6 +17,7 @@
     "dotenv": "^17.2.2",
     "eventsource": "^4.0.0",
     "express": "^5.1.0",
+    "express-zip": "^3.0.0",
     "fs": "^0.0.1-security",
     "googleapis": "^162.0.0",
     "open": "^10.2.0",
