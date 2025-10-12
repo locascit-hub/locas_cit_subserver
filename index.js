@@ -339,7 +339,7 @@ app.get("/starttolisten",(req, res) => {
    const { busNo } = req.query; 
   console.log("Starting to listen to buses",busNo);
   if(buses.includes(busNo)) return;
-  buses.push(bNo);
+  buses.push(busNo);
 
   const url = `${process.env.WORKERDOMAIN}/substream?busNo=${busNo}&auth=iamrender`;
   const es = new EventSource(url);
