@@ -33,6 +33,7 @@ let timer=null;
 let url=process.env.URL||"";
 let counter=0; //2hrs in 13 minutes frequency
 let stopcount=0;
+let buses=[];
 
 
 // VAPID keys
@@ -267,6 +268,8 @@ async function bus_started(bNo,res) {
   console.log("Bus started request for bus no:", bNo);
   if (!bNo) return "Missing bus number";
 
+  buses.push(bNo);
+
   const students = db.prepare(
     "SELECT * FROM Students where clgNo = ?"
   ).all(`${bNo}.0`);
@@ -292,7 +295,8 @@ async function bus_started(bNo,res) {
 
 
 async function bus_stopped(bNo) {
-  console.log("stopped")
+  console.log("stopped",bNo);
+  buses=buses.filter(b=>b!==bNo);
 }
 
 
@@ -337,6 +341,7 @@ app.get("/starttolisten",(req, res) => {
 
    const { busNo } = req.query; 
   console.log("Starting to listen to buses",busNo);
+  if(buses.includes(busNo)) return;
 
   const url = `${process.env.WORKERDOMAIN}/substream?busNo=${busNo}&auth=iamrender`;
   const es = new EventSource(url);
@@ -401,6 +406,6 @@ timer = setInterval(() => {
     return;
      }
 
-    console.log("now-count", counter++);
+    console.log("now-count", counter++, buses);
 
   }, 780000); // 13 minutes interval (780000 ms)
