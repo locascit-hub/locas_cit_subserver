@@ -267,9 +267,6 @@ app.get("/getready",(req, res) => {
 async function bus_started(bNo,res) {
   console.log("Bus started request for bus no:", bNo);
   if (!bNo) return "Missing bus number";
-
-  buses.push(bNo);
-
   const students = db.prepare(
     "SELECT * FROM Students where clgNo = ?"
   ).all(`${bNo}.0`);
@@ -342,6 +339,7 @@ app.get("/starttolisten",(req, res) => {
    const { busNo } = req.query; 
   console.log("Starting to listen to buses",busNo);
   if(buses.includes(busNo)) return;
+  buses.push(bNo);
 
   const url = `${process.env.WORKERDOMAIN}/substream?busNo=${busNo}&auth=iamrender`;
   const es = new EventSource(url);
