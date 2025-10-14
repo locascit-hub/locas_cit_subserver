@@ -382,16 +382,16 @@ app.get("/stopcount",(req, res) => {
 app.listen(port, () => console.log(`Server running on port ${port}`));
 
 timer = setInterval(() => {
-    fetch(`${url}/hey`)
-    .catch(err => console.error("Error in counter:", err));
-
-    if(counter>stopcount){
+    if(counter>=stopcount){
     clearInterval(timer);
     timer=null;
     counter=0;
     console.log(`Timer stopped after ${stopcount+1}`);
     return;
      }
+  fetch(`${url}/hey`)
+    .catch(err => console.error("Error in counter:", err));
+
 
     console.log("now-count", counter++, buses);
 
