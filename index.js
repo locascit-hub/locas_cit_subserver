@@ -121,7 +121,6 @@ async function populateStudents() {
   console.log(`Inserted ${data.length} students into single SQLite DB`);
 }
 
-recreateLogsFolder();
 wipeOutAndCreateDB();
 // Run once
 populateStudents();
@@ -246,6 +245,7 @@ app.get("/busstarted", async (req, res) => {
 
 
 app.get("/hey",(req, res) => {
+  recreateLogsFolder();
   res.send("hey");
 });
 
@@ -257,6 +257,7 @@ app.get("/getready",(req, res) => {
   else{
     stopcount=parseInt(sc);
   }
+  recreateLogsFolder();
   res.send(`Timer set to ${stopcount}`);
 });
 
