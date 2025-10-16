@@ -72,7 +72,7 @@ function wipeOutAndCreateDB() {
     db.exec("DELETE FROM Students; DELETE FROM sqlite_sequence WHERE name='Students';");
     console.log("Database wiped out and ready!");
   } catch (err) {
-    console.error("DB error:", err);
+    console.error("DB error:");
   }
 }
 
@@ -85,7 +85,7 @@ async function populateStudents() {
       .not("clgNo", "is", null);
 
     if (error) {
-      console.error("Supabase error:", error);
+      console.error("Supabase error:");
       return;
     }
 
@@ -107,7 +107,7 @@ async function populateStudents() {
           const [lat, lon] = coords;
           insert.run(subscription, s.clgNo, lat, lon);
         } catch (inner) {
-          console.error("Insert error for a student:", inner);
+          console.error("Insert error for a student:");
         }
       }
     });
@@ -115,7 +115,7 @@ async function populateStudents() {
     insertMany(data);
     console.log(`Inserted ${data.length} students into SQLite DB`);
   } catch (err) {
-    console.error("populateStudents error:", err);
+    console.error("populateStudents error:");
   }
 }
 
@@ -126,7 +126,7 @@ function recreateLogsFolder() {
     fs.mkdirSync(LOCAL_FOLDER, { recursive: true });
     console.log("Logs folder ready!");
   } catch (err) {
-    console.error("Error managing logs folder:", err);
+    console.error("Error managing logs folder:");
   }
 }
 
@@ -184,6 +184,11 @@ app.get("/getready", (req, res) => {
   res.send(`Timer set to ${stopcount}`);
 });
 
+
+app.get('stop',(req, res) => {
+  stopcount=0;
+});
+
 // Admin actions
 app.get("/actions", (req, res) => {
   const { task } = req.query;
@@ -208,9 +213,6 @@ app.post("/updatebus", async (req, res) => {
   const { busNo, event, lat, long } = req.body;
   if (!busNo || !event) return res.status(400).send("Missing busNo or event");
 
-  console.log(`Update from bus ${busNo}: ${event} ${lat || ""} ${long || ""}`);
-
-
   try {
     await acquireDbLock();
 
@@ -219,8 +221,10 @@ app.post("/updatebus", async (req, res) => {
       const pushData = { title: `Bus ${busNo} has started !!`, data: { busNo, ts: Date.now() } };
       if (students.length) await sendPush(students, pushData, "busstarted", busNo);
       buses.push(busNo);
+      console.log(`Bus ${busNo} started, notified ${students.length} students`);
     } else if (event === "bus_stopped") {
       buses = buses.filter(b => b !== busNo);
+      console.log(`Bus ${busNo} stopped`);
     } else if (event === "new_loc") {
       fs.appendFileSync(path.join(LOCAL_FOLDER, `logs_${busNo}.txt`), `${lat},${long}\n`);
 
@@ -242,7 +246,7 @@ app.post("/updatebus", async (req, res) => {
     res.send("Update received");
   } catch (err) {
     releaseDbLock();
-    console.error("/updatebus error:", err);
+    console.error("/updatebus error:");
     res.status(500).send("Server error");
   }
 });
@@ -272,7 +276,7 @@ app.post("/nearbyfeature", async (req, res) => {
     fs.appendFileSync(path.join(LOCAL_FOLDER, `${bNo}_logs.txt`), `${lat},${lon}\n`);
     res.send("Nearby push triggered");
   } catch (err) {
-    console.error("/nearbyfeature error:", err);
+    console.error("/nearbyfeature error:");
     res.status(500).send("Internal error");
   }
 });
@@ -307,13 +311,13 @@ async function deleteIfExists(fileName) {
     const existing = (data || []).find(f => f.name === fileName);
     if (existing) await supabaseStorage.storage.from(BUCKET_NAME).remove([fileName]);
   } catch (err) {
-    console.error("deleteIfExists error:", err);
+    console.error("deleteIfExists error:");
   }
 }
 
-app.get("/exportbuses", async (req, res) => {
-  try {
-    const dayStr = String(new Date().getDate()).padStart(2, "0");
+
+async function exportbuses() {
+   const dayStr = String(new Date().getDate()).padStart(2, "0");
     const zipFilename = `buses_logs_${SERVER_NO}_${dayStr}.zip`;
 
     fs.mkdirSync(TMP_FOLDER, { recursive: true });
@@ -328,9 +332,16 @@ app.get("/exportbuses", async (req, res) => {
 
     if (uploadError) throw uploadError;
     fs.unlinkSync(zipPath);
+    console.log(`✅ Uploaded ${zipFilename} to Supabase Storage`);
+    return zipFilename;
+}
+
+
+app.get("/exportbuses", async (req, res) => {
+  try {
+    const zipFilename = await exportbuses();
     res.send(`✅ Uploaded ${zipFilename} to Supabase Storage`);
   } catch (err) {
-    console.error(err);
     res.status(500).send("Error uploading buses");
   }
 });
@@ -341,7 +352,6 @@ app.get("/exportbuseszip", (req, res) => {
     const zipFiles = files.map(file => ({ path: path.join(LOCAL_FOLDER, file), name: file }));
     res.zip(zipFiles, `buses_logs_${SERVER_NO}.zip`);
   } catch (err) {
-    console.error("exportbuseszip error:", err);
     res.status(500).send("Failed to create zip");
   }
 });
@@ -353,13 +363,15 @@ app.listen(port, () => console.log(`Server running on port ${port}`));
 
 timer = setInterval(() => {
     fetch(`${process.env.URL}/hey`)
-    .catch(err => console.error("Error in counter:", err));
+    .catch(err => console.error("Error in counter:"));
      // time is greater than 8.10 am
     const now = new Date();
 
     if(counter>=stopcount || (now.getHours() === 8 && now.getMinutes() > 10)){
     clearInterval(timer);
+    if(stopcount==12){
     exportbuses();
+    }
     timer=null;
     counter=0;
     stopcount=0;
