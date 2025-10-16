@@ -180,7 +180,7 @@ let counter = 0;
 
 app.get("/getready", (req, res) => {
   const { sc } = req.query;
-  stopcount = sc ? parseInt(sc, 10) || 12 : 12;
+  stopcount = sc ? parseInt(sc, 10) || 13 : 13;
   res.send(`Timer set to ${stopcount}`);
 });
 
