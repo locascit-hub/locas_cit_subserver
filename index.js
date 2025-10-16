@@ -369,7 +369,7 @@ timer = setInterval(() => {
 
     if(counter>=stopcount || (now.getHours() === 8 && now.getMinutes() > 10)){
     clearInterval(timer);
-    if(stopcount==12){
+    if(stopcount!==0){
     exportbuses();
     }
     timer=null;
