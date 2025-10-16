@@ -352,7 +352,7 @@ app.listen(port, () => console.log(`Server running on port ${port}`));
 
 
 timer = setInterval(() => {
-    fetch(`${url}/hey`)
+    fetch(`${process.env.URL}/hey`)
     .catch(err => console.error("Error in counter:", err));
      // time is greater than 8.10 am
     const now = new Date();
