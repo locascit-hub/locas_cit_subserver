@@ -1,3 +1,4 @@
+// index.js
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import express from "express";
@@ -5,13 +6,13 @@ import cors from "cors";
 import Database from "better-sqlite3";
 import webpush from "web-push";
 import fs from "fs";
-import {EventSource} from "eventsource";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
+import archiver from "archiver";
 import zip from "express-zip";
-dotenv.config();
 
+dotenv.config();
 
 // Recreate __dirname in ES module scope
 const __filename = fileURLToPath(import.meta.url);
@@ -23,110 +24,112 @@ app.use(cors());
 app.use(express.json());
 const port = process.env.PORT || 3000;
 
-app.use(express.static(path.join(__dirname, "buses")));
+// serve static logs folder
+const LOCAL_FOLDER = "buses";
+const TMP_FOLDER = "tmp";
+app.use(express.static(path.join(__dirname, LOCAL_FOLDER)));
 
-app.get("/get_students_db", (req, res) => {
-  res.sendFile(path.join(__dirname, "students.db"));
-});
+// -------------------- Globals --------------------
+let buses = []; // active bus list
 
-let timer=null;
-let url=process.env.URL||"";
-let counter=0; //2hrs in 13 minutes frequency
-let stopcount=0;
-let buses=[];
-
-
-// VAPID keys
+// -------------------- VAPID --------------------
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 
+if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+  console.error("❌ Missing VAPID keys in .env");
+}
+
 webpush.setVapidDetails(
-  `mailto:${process.env.EMAIL}`, 
+  `mailto:${process.env.EMAIL || "noreply@example.com"}`,
   VAPID_PUBLIC_KEY,
   VAPID_PRIVATE_KEY
 );
 
-// Supabase client
+// -------------------- Supabase --------------------
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
 
-// // Initialize single SQLite DB
+// -------------------- Local DB --------------------
 const db = new Database("students.db");
-//-----------------------////--------------------
-//Create necessary folders
 
-function recreateLogsFolder(){
-  if (fs.existsSync("buses")){
-  fs.rmSync("buses", { recursive: true, force: true });
-console.log("Folder deleted!");
-  fs.mkdirSync("buses");
-  console.log("Folder created!");
-}
-else{
-  fs.mkdirSync("buses");
-  console.log("Folder created!");
-}
-}
-
-function wipeOutAndCreateDB(){
-  // Create Students table if not exists
-db.exec(`
-CREATE TABLE IF NOT EXISTS Students (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  subscription TEXT NOT NULL,
-  clgNo TEXT NOT NULL,
-  lat REAL,
-  lon REAL,
-  sent INTEGER DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_clg_sent ON Students(clgNo, sent);
-`);
-
-//truncate all rows and reset id counter
-db.exec("DELETE FROM Students; DELETE FROM sqlite_sequence WHERE name='Students';");
-console.log("Database wiped out and ready!");
+// -------------------- DB Helpers --------------------
+function wipeOutAndCreateDB() {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS Students (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subscription TEXT NOT NULL,
+        clgNo TEXT NOT NULL,
+        lat REAL,
+        lon REAL,
+        sent INTEGER DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_clg_sent ON Students(clgNo, sent);
+    `);
+    db.exec("DELETE FROM Students; DELETE FROM sqlite_sequence WHERE name='Students';");
+    console.log("Database wiped out and ready!");
+  } catch (err) {
+    console.error("DB error:", err);
+  }
 }
 
-//-----------------------////--------------------
-
-
-
-// Populate DB from Supabase (run once or periodically)
 async function populateStudents() {
-  const { data, error } = await supabase
-    .from("Students")
-    .select("subscription, clgNo, coordinates,id")
-    .not("subscription", "is", null)
-    .not("clgNo", "is", null);
+  try {
+    const { data, error } = await supabase
+      .from("Students")
+      .select("subscription, clgNo, coordinates")
+      .not("subscription", "is", null)
+      .not("clgNo", "is", null);
 
-  if (error) return console.error("Supabase error:", error);
-
-  const insert = db.prepare(
-    "INSERT INTO Students (subscription, clgNo, lat, lon) VALUES (?, ?, ?, ?)"
-  );
-
-  const insertMany = db.transaction((students) => {
-    for (const s of students) {
-      const subscription = s.subscription;
-      const [lat, lon] = s.coordinates.split(",").map(parseFloat);
-      //console.log(subscription, s.clgNo, lat, lon);
-      insert.run(subscription, s.clgNo, lat, lon);
+    if (error) {
+      console.error("Supabase error:", error);
+      return;
     }
-  });
 
+    if (!Array.isArray(data) || data.length === 0) {
+      console.log("No students returned from Supabase.");
+      return;
+    }
 
-  insertMany(data);
-  console.log(`Inserted ${data.length} students into single SQLite DB`);
+    const insert = db.prepare(
+      "INSERT INTO Students (subscription, clgNo, lat, lon) VALUES (?, ?, ?, ?)"
+    );
+
+    const insertMany = db.transaction((students) => {
+      for (const s of students) {
+        try {
+          const subscription = s.subscription;
+          const coords = (s.coordinates || "").split(",").map(parseFloat);
+          if (coords.length !== 2 || Number.isNaN(coords[0]) || Number.isNaN(coords[1])) continue;
+          const [lat, lon] = coords;
+          insert.run(subscription, s.clgNo, lat, lon);
+        } catch (inner) {
+          console.error("Insert error for a student:", inner);
+        }
+      }
+    });
+
+    insertMany(data);
+    console.log(`Inserted ${data.length} students into SQLite DB`);
+  } catch (err) {
+    console.error("populateStudents error:", err);
+  }
 }
 
-recreateLogsFolder();
-wipeOutAndCreateDB();
-// Run once
-populateStudents();
+// -------------------- Utilities --------------------
+function recreateLogsFolder() {
+  try {
+    if (fs.existsSync(LOCAL_FOLDER)) fs.rmSync(LOCAL_FOLDER, { recursive: true, force: true });
+    fs.mkdirSync(LOCAL_FOLDER, { recursive: true });
+    console.log("Logs folder ready!");
+  } catch (err) {
+    console.error("Error managing logs folder:", err);
+  }
+}
 
-// Bounding box calculation
 function getBoundingBox(lat, lon, kmRadius) {
   const R = 6371;
   const deltaLat = (kmRadius / R) * (180 / Math.PI);
@@ -139,8 +142,8 @@ function getBoundingBox(lat, lon, kmRadius) {
   };
 }
 
-// ------------------- Common util -------------------
-async function sendPush(students, payload,byFunc,bNo) {
+// -------------------- Push util --------------------
+async function sendPush(students, payload, byFunc, bNo) {
   let successCount = 0;
   let failCount = 0;
 
@@ -151,267 +154,137 @@ async function sendPush(students, payload,byFunc,bNo) {
         await webpush.sendNotification(subscription, JSON.stringify(payload));
         successCount++;
       } catch (err) {
-        console.error("Push failed:", err);
         failCount++;
       }
     })
   );
 
-  console.log(
-    `✅ Push finished for "${byFunc}-${bNo}" → ${successCount},${failCount}`
-  );
-
+  console.log(`✅ Push finished for "${byFunc}-${bNo}" → ${successCount},${failCount}`);
   return { successCount, failCount };
 }
 
-app.get("/actions", (req, res) => {
-  const {task}=req.query;
-  if(task ==="resetdb"){
-    wipeOutAndCreateDB();
-    populateStudents();
-    res.send("Database reset and populated");
-  }
-  else if(task==="resetlogs"){
-    recreateLogsFolder();
-    res.send("Logs folder recreated");
-  }
-  else{
-    res.send("No valid action specified");
-  }
-});
+// -------------------- Init --------------------
+recreateLogsFolder();
+wipeOutAndCreateDB();
+populateStudents();
 
-// Nearby students
-app.post("/nearbyfeature", async (req, res) => {
-  const { bNo, lat, lon } = req.body;
-  if (!bNo || lat == null || lon == null)
-    return res.status(400).send("Missing bus number or coordinates");
+// -------------------- Routes --------------------
 
-  const box = getBoundingBox(lat, lon, 1); // 1 km radius
-  const candidates = db.prepare(
-    `SELECT id, subscription 
-     FROM Students
-     WHERE clgNo = ? AND sent = 0
-       AND lat BETWEEN ? AND ?
-       AND lon BETWEEN ? AND ?`
-  ).all( `${bNo}.0`, box.minLat, box.maxLat, box.minLon, box.maxLon);
+// Health check
+app.get("/hey", (req, res) => res.send("hey"));
 
-  const updateSent = db.prepare("UPDATE Students SET sent = 1 WHERE id = ?");
+// Timer ready
+let stopcount = 0;
+let timer;
+let counter = 0;
 
-  const pushData = { title: `Bus ${bNo} is nearby !!`, data: {bNo:bNo,ts: Date.now()} };
-
-  // Fire and forget (don't block API response)
-  if(candidates.length>0){
-  (async () => {
-    try {
-      await sendPush(candidates, pushData,"nearby",bNo);
-      for (const student of candidates) updateSent.run(student.id);
-    } catch (err) {
-      console.error("Push loop error:", err);
-    }
-  })();
-}
-
-  fs.appendFileSync(`buses/${bNo}_logs.txt`, `${lat},${lon}\n`);
-  res.send("Nearby push triggered");
-});
-
-
-// Bus started
-app.get("/busstarted", async (req, res) => {
-  const { bNo } = req.query;
-  console.log("Bus started request for bus no:", bNo);
-  if (!bNo) return res.status(400).send("Missing bus number");
-
-  const students = db.prepare(
-    "SELECT * FROM Students where clgNo = ?"
-  ).all(`${bNo}.0`);
-
-  // console.log(`Bus ${bNo} started with ${students.length} students`);
-
-  const pushData = { title: `Bus ${bNo} has started !!`, data: {bNo:bNo,ts: Date.now()} };
-
-  // Fire and forget
-  if(students.length>0){
-  (async () => {
-    try {
-      await sendPush(students, pushData,"busstarted",bNo);
-    } catch (err) {
-      console.error("Push loop error:", err);
-    }
-  })();
-}
-
-  res.send("Push triggered");
-});
-
-
-app.get("/hey",(req, res) => {
-  res.send("hey");
-});
-
-app.get("/getready",(req, res) => {
-  const {sc}=req.query;
-  if(!sc){
-  stopcount=12;
-  }
-  else{
-    stopcount=parseInt(sc);
-  }
+app.get("/getready", (req, res) => {
+  const { sc } = req.query;
+  stopcount = sc ? parseInt(sc, 10) || 12 : 12;
   res.send(`Timer set to ${stopcount}`);
 });
 
+// Admin actions
+app.get("/actions", (req, res) => {
+  const { task } = req.query;
+  if (task === "resetdb") {
+    wipeOutAndCreateDB();
+    populateStudents();
+    return res.send("Database reset and populated");
+  } else if (task === "resetlogs") {
+    recreateLogsFolder();
+    return res.send("Logs folder recreated");
+  } else return res.send("No valid action specified");
+});
 
-async function bus_started(bNo,res) {
-  if (!bNo) return "Missing bus number";
-  const students = db.prepare(
-    "SELECT * FROM Students where clgNo = ?"
-  ).all(`${bNo}.0`);
+// -------------------- Bus updates (HTTP instead of WS) --------------------
 
-  // console.log(`Bus ${bNo} started with ${students.length} students`);
+// Simple DB lock to prevent concurrent writes
+let dbLock = false;
+async function acquireDbLock() { while (dbLock) await new Promise(r => setTimeout(r, 5)); dbLock = true; }
+function releaseDbLock() { dbLock = false; }
 
-  const pushData = { title: `Bus ${bNo} has started !!`, data: {bNo:bNo,ts: Date.now()} };
+app.post("/updatebus", async (req, res) => {
+  const { busNo, event, lat, long } = req.body;
+  if (!busNo || !event) return res.status(400).send("Missing busNo or event");
 
-    console.log("Bus started request for bus no:", bNo,"with",students.length,"students");
+  console.log(`Update from bus ${busNo}: ${event} ${lat || ""} ${long || ""}`);
 
-  // Fire and forget
-  if(students.length>0){
-  (async () => {
-    try {
-      await sendPush(students, pushData,"busstarted",bNo);
-    } catch (err) {
-      console.error("Push loop error:", err);
+
+  try {
+    await acquireDbLock();
+
+    if (event === "bus_started") {
+      const students = db.prepare("SELECT * FROM Students WHERE clgNo = ?").all(`${busNo}.0`);
+      const pushData = { title: `Bus ${busNo} has started !!`, data: { busNo, ts: Date.now() } };
+      if (students.length) await sendPush(students, pushData, "busstarted", busNo);
+      buses.push(busNo);
+    } else if (event === "bus_stopped") {
+      buses = buses.filter(b => b !== busNo);
+    } else if (event === "new_loc") {
+      fs.appendFileSync(path.join(LOCAL_FOLDER, `logs_${busNo}.txt`), `${lat},${long}\n`);
+
+      const box = getBoundingBox(lat, long, 1); // 1km radius
+      const candidates = db.prepare(
+        `SELECT id, subscription FROM Students WHERE clgNo = ? AND sent = 0
+         AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?`
+      ).all(`${busNo}.0`, box.minLat, box.maxLat, box.minLon, box.maxLon);
+
+      const updateSent = db.prepare("UPDATE Students SET sent = 1 WHERE id = ?");
+
+      if (candidates.length > 0) {
+        await sendPush(candidates, { title: `Bus ${busNo} is nearby !!`, data: { busNo, ts: Date.now() } }, "nearby", busNo);
+        for (const student of candidates) updateSent.run(student.id);
+      }
     }
-  })();
-}
 
-}
+    releaseDbLock();
+    res.send("Update received");
+  } catch (err) {
+    releaseDbLock();
+    console.error("/updatebus error:", err);
+    res.status(500).send("Server error");
+  }
+});
 
+// -------------------- Nearby push --------------------
+app.post("/nearbyfeature", async (req, res) => {
+  try {
+    const { bNo, lat, lon } = req.body;
+    if (!bNo || lat == null || lon == null) return res.status(400).send("Missing bus number or coordinates");
 
-async function bus_stopped(bNo) {
-  console.log("stopped",bNo);
-  buses=buses.filter(b=>b!==bNo);
-}
+    const box = getBoundingBox(lat, lon, 1); // 1 km radius
+    const candidates = db.prepare(
+      `SELECT id, subscription FROM Students
+       WHERE clgNo = ? AND sent = 0
+         AND lat BETWEEN ? AND ?
+         AND lon BETWEEN ? AND ?`
+    ).all(`${bNo}.0`, box.minLat, box.maxLat, box.minLon, box.maxLon);
 
+    const updateSent = db.prepare("UPDATE Students SET sent = 1 WHERE id = ?");
+    const pushData = { title: `Bus ${bNo} is nearby !!`, data: { bNo, ts: Date.now() } };
 
-async function bus_nearby(bNo,lat,lon) {
-  if (!bNo || lat == null || lon == null)
-    return "Missing bus number or coordinates";
-
-  const box = getBoundingBox(lat, lon, 1); // 1 km radius
-
-  const candidates = db.prepare(
-    `SELECT id, subscription 
-     FROM Students
-     WHERE clgNo = ? AND sent = 0
-       AND lat BETWEEN ? AND ?
-       AND lon BETWEEN ? AND ?`
-  ).all( `${bNo}.0`, box.minLat, box.maxLat, box.minLon, box.maxLon);
-
-  const updateSent = db.prepare("UPDATE Students SET sent = 1 WHERE id = ?");
-
-  const pushData = { title: `Bus ${bNo} is nearby !!`, data: {bNo:bNo,ts: Date.now()} };
-
-  if(candidates.length>0){
-  (async () => {
-    try {
-      await sendPush(candidates, pushData,"nearby",bNo);
+    if (candidates.length > 0) {
+      await sendPush(candidates, pushData, "nearby", bNo);
       for (const student of candidates) updateSent.run(student.id);
-    } catch (err) {
-      console.error("Push loop error:", err);
     }
-  })();
-}
-}
 
-
-app.get("/starttolisten",(req, res) => {
-
-   const { busNo } = req.query; 
-  console.log("Starting to listen to buses",busNo);
-  if(buses.includes(busNo)) return;
-  buses.push(busNo);
-
-  const url = `${process.env.WORKERDOMAIN}/substream?busNo=${busNo}&auth=iamrender`;
-  const es = new EventSource(url);
-
-  es.onopen = () => console.log(`Connected to bus ${busNo} SSE`);
-  es.onerror = (err) => console.error(`Error on bus ${busNo}:`, err);
-
-  es.onmessage = (event) => {
-    try {
-    if(event.data!=="connected"){
-    const data = JSON.parse(event.data);
-
-    if(data.event==="bus_started"){
-      bus_started(data.busNo);
-    }
-    else if(data.event==="bus_stopped"){
-      bus_stopped(data.busNo);
-    }
-    else if(data.event==="new_loc"){
-      bus_nearby(data.busNo,data.lat,data.long);
-    }
-    if(data.lat && data.long){
-      fs.appendFileSync(`buses/logs_${data.busNo}.txt`, `${data.lat},${data.long}\n`);
-    }
+    fs.appendFileSync(path.join(LOCAL_FOLDER, `${bNo}_logs.txt`), `${lat},${lon}\n`);
+    res.send("Nearby push triggered");
+  } catch (err) {
+    console.error("/nearbyfeature error:", err);
+    res.status(500).send("Internal error");
   }
-    }
-    catch(err){
-      console.error("Failed to parse SSE data",busNo,err);
-    }
-  };
-
-  res.send("Started listening to buses");
-
 });
 
-
-app.get("/stopcount",(req, res) => {
-  if(timer){
-    clearInterval(timer);
-    timer=null;
-    counter=0;
-    stopcount=1;
-    console.log("Timer stopped manually");
-  }
-  res.send("Timer stopped");
-});
-
-
-app.listen(port, () => console.log(`Server running on port ${port}`));
-
-timer = setInterval(() => {
-    fetch(`${url}/hey`)
-    .catch(err => console.error("Error in counter:", err));
-
-    if(counter>stopcount){
-    clearInterval(timer);
-    timer=null;
-    counter=0;
-    console.log(`Timer stopped after ${stopcount+1}`);
-    return;
-     }
-
-    console.log("now-count", counter++, buses);
-
-  }, 780000); // 13 minutes interval (780000 ms)
-
-
-import archiver from "archiver";
-
+// -------------------- Export buses --------------------
 const SERVER_NO = process.env.SUBSERVER_NO || "unknown";
-const LOCAL_FOLDER = "buses";
-const TMP_FOLDER = "tmp";
-
-// Initialize Supabase client
+const BUCKET_NAME = "Buses";
 const supabaseStorage = createClient(
-  process.env.SUPABASE_URL_STORAGE,
-  process.env.SUPABASE_SERVICE_ROLE_KEY_STORAGE
+  process.env.SUPABASE_URL_STORAGE || process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY_STORAGE || process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-const BUCKET_NAME = "Buses"; // name of your Supabase bucket
-
-// Helper: create zip from local folder
 async function createZip(zipPath) {
   const files = fs.readdirSync(LOCAL_FOLDER);
   if (!files.length) throw new Error("No files to zip");
@@ -419,31 +292,25 @@ async function createZip(zipPath) {
   await new Promise((resolve, reject) => {
     const output = fs.createWriteStream(zipPath);
     const archive = archiver("zip", { zlib: { level: 9 } });
-
     output.on("close", resolve);
     archive.on("error", reject);
-
     archive.pipe(output);
     files.forEach(f => archive.file(path.join(LOCAL_FOLDER, f), { name: f }));
     archive.finalize();
   });
 }
 
-// Helper: delete file if exists in Supabase Storage
 async function deleteIfExists(fileName) {
-  const { data, error } = await supabaseStorage.storage
-    .from(BUCKET_NAME)
-    .list("", { search: fileName });
-
-  if (error) throw error;
-
-  const existing = data.find(f => f.name === fileName);
-  if (existing) {
-    await supabaseStorage.storage.from(BUCKET_NAME).remove([fileName]);
+  try {
+    const { data, error } = await supabaseStorage.storage.from(BUCKET_NAME).list("", { search: fileName });
+    if (error) throw error;
+    const existing = (data || []).find(f => f.name === fileName);
+    if (existing) await supabaseStorage.storage.from(BUCKET_NAME).remove([fileName]);
+  } catch (err) {
+    console.error("deleteIfExists error:", err);
   }
 }
 
-// Route: zip & upload
 app.get("/exportbuses", async (req, res) => {
   try {
     const dayStr = String(new Date().getDate()).padStart(2, "0");
@@ -452,25 +319,15 @@ app.get("/exportbuses", async (req, res) => {
     fs.mkdirSync(TMP_FOLDER, { recursive: true });
     const zipPath = path.join(TMP_FOLDER, zipFilename);
 
-    // 1️⃣ Create zip
     await createZip(zipPath);
-
-    // 2️⃣ Delete old file if exists
     await deleteIfExists(zipFilename);
 
-    // 3️⃣ Upload new zip
-    const fileStream = fs.createReadStream(zipPath);
     const { error: uploadError } = await supabaseStorage.storage
-  .from(BUCKET_NAME)
-  .upload(zipFilename, fs.createReadStream(zipPath), {
-    upsert: true,
-    duplex: "half"
-  });
+      .from(BUCKET_NAME)
+      .upload(zipFilename, fs.createReadStream(zipPath), { upsert: true, duplex: "half" });
 
     if (uploadError) throw uploadError;
-
     fs.unlinkSync(zipPath);
-
     res.send(`✅ Uploaded ${zipFilename} to Supabase Storage`);
   } catch (err) {
     console.error(err);
@@ -479,13 +336,39 @@ app.get("/exportbuses", async (req, res) => {
 });
 
 app.get("/exportbuseszip", (req, res) => {
-  const files = fs.readdirSync("buses"); // array of filenames
-
-  const zipFiles = files.map(file => ({
-    path: `buses/${file}`, // file path on disk
-    name: file            // filename in zip
-  }));
-
-  // correct: res.zip(array_of_files, zip_filename)
-  res.zip(zipFiles, `buses_logs_${process.env.SUBSERVER_NO || "unknown"}.zip`);
+  try {
+    const files = fs.readdirSync(LOCAL_FOLDER);
+    const zipFiles = files.map(file => ({ path: path.join(LOCAL_FOLDER, file), name: file }));
+    res.zip(zipFiles, `buses_logs_${SERVER_NO}.zip`);
+  } catch (err) {
+    console.error("exportbuseszip error:", err);
+    res.status(500).send("Failed to create zip");
+  }
 });
+
+// -------------------- Start Server --------------------
+app.listen(port, () => console.log(`Server running on port ${port}`));
+
+
+
+timer = setInterval(() => {
+    fetch(`${url}/hey`)
+    .catch(err => console.error("Error in counter:", err));
+     // time is greater than 8.10 am
+    const now = new Date();
+
+    if(counter>=stopcount || (now.getHours() === 8 && now.getMinutes() > 10)){
+    clearInterval(timer);
+    exportbuses();
+    timer=null;
+    counter=0;
+    stopcount=0;
+    buses = [];
+    console.log(`Timer stopped after ${stopcount+1}`);
+    return;
+     }
+
+    console.log("now-count", counter++, buses);
+
+  }, 780000); // 13 minutes interval (780000 ms)
+
